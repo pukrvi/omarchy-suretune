@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "vishnawat.suretune",
+  "name": "SureTune",
+  "version": "0.2.0",
+  "author": "vishnawat",
+  "license": "MIT",
+  "description": "The one radio icon: Sticky player, merged station catalogue (cliamp + Hertz + Lofi Focus), YT Music and Spotify search, user defaults — all driven by cliamp.",
+  "keywords": [
+    "radio",
+    "music",
+    "cliamp",
+    "spotify",
+    "youtube"
+  ],
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "SureTune",
+    "description": "Sticky player, merged station catalogue, YT Music & Spotify search",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

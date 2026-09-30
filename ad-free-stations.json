@@ -1,0 +1,118 @@
+{
+  "_comment": "Curated ad-free stations, ranked. These lead every station list in SureTune, ahead of whatever the radio-browser directory returns, because they are hand-checked for: no advertising, no DJ chatter every break, and a direct stream URL that does not sit behind a redirect or a geo gate. Everything listed here was verified to return audio on the date in _verified. The directory results still appear below them, since a long tail of small stations is still worth having.",
+  "_verified": "2026-09-30",
+  "stations": [
+    {
+      "rank": 1,
+      "name": "Radio Paradise — Main Mix",
+      "url": "https://stream.radioparadise.com/mp3-128",
+      "genre": "Eclectic",
+      "detail": "Listener-supported, DJ-free, no ads",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 2,
+      "name": "KEXP 90.3 FM",
+      "url": "https://kexp-mp3-128.streamguys1.com/kexp128.mp3",
+      "genre": "Eclectic",
+      "detail": "Seattle community radio, no ads",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 3,
+      "name": "FIP",
+      "url": "https://icecast.radiofrance.fr/fip-hifi.aac",
+      "genre": "Eclectic",
+      "detail": "Radio France, no advertising, no talk",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 4,
+      "name": "Radio Paradise — Mellow Mix",
+      "url": "https://stream.radioparadise.com/mellow-128",
+      "genre": "Mellow",
+      "detail": "The calmer side of RP",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 5,
+      "name": "WFMU Freeform",
+      "url": "https://stream0.wfmu.org/freeform-128k",
+      "genre": "Freeform",
+      "detail": "Jersey City, no ads, no format",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 6,
+      "name": "SomaFM — Groove Salad",
+      "url": "https://ice2.somafm.com/groovesalad-128-mp3",
+      "genre": "Ambient",
+      "detail": "Chilled beats and grooves, ad-free",
+      "needsUserAgent": true
+    },
+    {
+      "rank": 7,
+      "name": "SomaFM — Drone Zone",
+      "url": "https://ice2.somafm.com/dronezone-128-mp3",
+      "genre": "Ambient",
+      "detail": "Atmospheric, textural, ad-free",
+      "needsUserAgent": true
+    },
+    {
+      "rank": 8,
+      "name": "SomaFM — Lush",
+      "url": "https://ice2.somafm.com/lush-128-mp3",
+      "genre": "Electronica",
+      "detail": "Downtempo and vocal electronica",
+      "needsUserAgent": true
+    },
+    {
+      "rank": 9,
+      "name": "Radio Paradise — Beyond",
+      "url": "https://stream.radioparadise.com/beyond-128",
+      "genre": "Mellow",
+      "detail": "Ambient and post-rock adjacent",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 10,
+      "name": "WNYC 93.9 FM",
+      "url": "https://fm939.wnyc.org/wnycfm",
+      "genre": "News",
+      "detail": "New York public radio",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 11,
+      "name": "Radio Paradise — Global Mix",
+      "url": "https://stream.radioparadise.com/global-128",
+      "genre": "World",
+      "detail": "Rhythms from everywhere",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 12,
+      "name": "Radio Paradise — Rock Mix",
+      "url": "https://stream.radioparadise.com/rock-128",
+      "genre": "Rock",
+      "detail": "Indie and alternative leaning",
+      "needsUserAgent": false
+    },
+    {
+      "rank": 13,
+      "name": "SomaFM — Illinois Street Lounge",
+      "url": "https://ice2.somafm.com/illstreet-128-mp3",
+      "genre": "Lounge",
+      "detail": "Exotica and lounge, ad-free",
+      "needsUserAgent": true
+    },
+    {
+      "rank": 14,
+      "name": "SomaFM — Deep Space One",
+      "url": "https://ice2.somafm.com/deepspaceone-128-mp3",
+      "genre": "Ambient",
+      "detail": "Slow ambient for late hours",
+      "needsUserAgent": true
+    }
+  ]
+}

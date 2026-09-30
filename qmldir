@@ -1,0 +1,6 @@
+module vishnawat.suretune
+ComponentBarRow 1.0 ComponentBarRow.qml
+ComponentBarHome 1.0 ComponentBarHome.qml
+ComponentBarStations 1.0 ComponentBarStations.qml
+ComponentBarSearch 1.0 ComponentBarSearch.qml
+ComponentBarSettings 1.0 ComponentBarSettings.qml

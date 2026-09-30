@@ -1,0 +1,700 @@
+#!/usr/bin/env python3
+"""suretune-ctl: backend for the SureTune Omarchy bar plugin.
+
+SureTune owns one bar icon; playback always belongs to cliamp. The daemon
+launches `cliamp -d` (headless IPC mode) if it is not already running and
+speaks cliamp's v2 IPC through the `cliamp remote` CLI, so every stream
+SureTune touches also lands in cliamp's own history, MPRIS and keybindings.
+
+The station catalogue leads with a hand-checked, ad-free list
+(ad-free-stations.json) and then merges three more sources so nothing hides
+behind an extra icon: the running cliamp's radio provider, Hertz Radio's
+Radio Browser cache (~/.cache/hertz-radio/lists.json), and Lofi Focus's
+curated streams (sky.lofi/stations.json).
+
+Settings live in ~/.cache/suretune/settings.json. The big play button obeys
+the "onStart" preference on a fresh session:
+    "lofi"    - tune the ad-free default lofi stream (DEFAULT_STATION)
+    "resume"  - play what was on when cliamp last stopped (last.json)
+    "none"    - wait for a pick
+
+  in   <verb> [args...]        one command per line on stdin
+  out  {"type": "...", ...}    JSON lines on stdout
+
+Verbs: status, stations {genre,text,page,key}, search {provider,query},
+       home {genre}, browse, play <track>, start, toggle/stop/next/prev,
+       volume {value}, mute, favorites, fav <track>,
+       settings, set {key,value}, setup {provider}, quit.
+"""
+
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+VERSION = "0.2.0"
+
+CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "suretune")
+FAVORITES = os.path.join(CACHE, "favorites.json")
+LAST = os.path.join(CACHE, "last.json")
+LOCK = os.path.join(CACHE, "daemon.pid")
+SETTINGS = os.path.join(CACHE, "settings.json")
+
+CONFIG = os.environ.get("CLIAMP_CONFIG_DIR") or os.path.expanduser("~/.config/cliamp")
+SOCKET = os.path.join(CONFIG, "cliamp.sock")
+
+HERTZ_CACHE = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+    "hertz-radio", "lists.json")
+LOFI_STATIONS = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+    "omarchy", "plugins", "sky.lofi", "stations.json")
+
+# The hand-checked, ad-free stations that lead every list. Shipped beside
+# this script rather than in a config dir, so a fresh install gets them.
+CURATED_STATIONS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "ad-free-stations.json")
+
+GENRE_OPTIONS = ["All", "Lofi", "Jazz", "Blues", "Classical", "Electronic", "Hip Hop",
+                 "Pop", "Rock", "Metal", "Chillout", "Folk", "Country", "Reggae", "News"]
+PAGE = 35
+
+# Ad-free 24/7 lofi — the "just press play" default; switchable in Settings.
+DEFAULT_STATION = {
+    "title": "Lilo-Fi Radio",
+    "path": "https://azurecloud.pvtwebs.com/listen/lilo/radio.mp3",
+    "stream": True,
+}
+
+DEFAULT_SETTINGS = {
+    "onStart": "lofi",           # lofi | resume | none
+    "volume": 70,
+}
+
+os.makedirs(CACHE, exist_ok=True)
+sys.dont_write_bytecode = True
+
+
+def log(message):
+    print("suretune-ctl:", message, file=sys.stderr, flush=True)
+
+
+def read_json(path, fallback=None):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return fallback
+
+
+def write_json(path, value):
+    text = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(tmp, path)
+
+
+def clamp_text(value, limit):
+    return str(value if value is not None else "")[:limit]
+
+
+def config_value(section, key):
+    match = re.search(r"^\s*" + re.escape(key) + r"\s*=\s*\"([^\"]*)\"", section, re.M)
+    return match.group(1) if match else ""
+
+
+class Cliamp:
+    """All cliamp contact funnels through the `cliamp remote` CLI."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.binary = shutil.which("cliamp")
+        if not self.binary:
+            log("cliamp binary not found; SureTune needs it for playback")
+
+    def running(self):
+        if not self.binary:
+            return False
+        try:
+            result = subprocess.run(
+                [self.binary, "remote", "call", "runtime.snapshot"],
+                capture_output=True, timeout=6)
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+
+    def ensure(self):
+        if self.running() or not self.binary:
+            return
+        try:
+            subprocess.Popen(
+                [self.binary, "-d", "--no-auto-play"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True)
+        except OSError as error:
+            log("cannot launch cliamp: " + str(error))
+            return
+        for _ in range(40):
+            if self.running():
+                return
+            time.sleep(0.25)
+
+    def call(self, operation, params=None, wait=True):
+        if not self.binary:
+            return {"ok": False, "error": "cliamp is not installed"}
+        command = [self.binary, "remote", "call"]
+        if wait:
+            command.append("--wait")
+        command.append(operation)
+        if params is not None:
+            command += ["--params", json.dumps(params)]
+        with self.lock:
+            try:
+                result = subprocess.run(command, capture_output=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error": "cliamp timed out"}
+        try:
+            return json.loads(result.stdout)
+        except ValueError:
+            text = (result.stderr or result.stdout or b"").decode(errors="replace")[:200]
+            log("bad cliamp reply: " + text)
+            return {"ok": False, "error": text}
+
+    def job_result(self, message):
+        if message.get("ok") and isinstance(message.get("job"), dict):
+            job = message["job"]
+            if job.get("state") == "failed":
+                error = job.get("error") or {}
+                detail = error.get("detail") or error.get("message") or "cliamp failed"
+                return {"ok": False, "error": str(detail)[:200]}
+            if job.get("state") == "succeeded":
+                return job.get("result") or {"ok": True}
+            return {"ok": False, "error": "cliamp job " + str(job.get("state"))}
+        if "ok" in message:
+            return message
+        return {"ok": False, "error": clamp_text(message.get("error"), 200)}
+
+    @staticmethod
+    def track_payload(track):
+        return {
+            "title": clamp_text(track.get("title"), 160),
+            "path": track.get("path", ""),
+            "stream": track.get("stream", True),
+        }
+
+
+class Sources:
+    """The merged catalogue: curated ad-free stations, then cliamp radio,
+    the Hertz cache, and Lofi Focus."""
+
+    @staticmethod
+    def row(title, path, source, detail=""):
+        if not path:
+            return None
+        return {
+            "title": clamp_text(title, 160),
+            "path": path,
+            "stream": True,
+            "source": source,
+            "detail": clamp_text(detail, 60),
+        }
+
+    @classmethod
+    def curated_rows(cls, genre="All"):
+        """Hand-picked ad-free stations, in rank order.
+
+        These sort ahead of the directory results on purpose: they are
+        checked for advertising and for a direct stream URL, and they are
+        the stations a listener actually wants on a list of hundreds. The
+        directory tail still follows, because a long tail of small
+        stations is worth having.
+
+        A station whose URL is listed here but unreachable is dropped
+        rather than shown as a dead row, so the list never leads with a
+        station that cannot play.
+        """
+        data = read_json(CURATED_STATIONS, {})
+        rows = []
+        if not isinstance(data, dict):
+            return rows
+        stations = data.get("stations")
+        if not isinstance(stations, list):
+            return rows
+        wanted = (genre or "All").strip().lower()
+        for station in stations:
+            if not isinstance(station, dict) or not station.get("url"):
+                continue
+            label = station.get("genre", "")
+            if wanted not in ("", "all") and label.strip().lower() != wanted:
+                continue
+            row = cls.row(
+                station.get("name", "Station"), station["url"], "curated",
+                detail=station.get("detail", "") or label)
+            if row:
+                rows.append(row)
+        return rows   # already in rank order
+
+    @classmethod
+    def lofi_rows(cls):
+        """Lofi Focus's curated direct streams, every category."""
+        data = read_json(LOFI_STATIONS, {})
+        rows = []
+        if isinstance(data, dict):
+            for category in data.get("categories", []):
+                if not isinstance(category, dict):
+                    continue
+                category_name = clamp_text(category.get("name"), 30)
+                for station in category.get("stations", []):
+                    if not isinstance(station, dict) or not station.get("url"):
+                        continue
+                    if station.get("kind") == "youtube":
+                        continue
+                    rows.append(cls.row(
+                        station.get("name", "Station"), station["url"], "lofi",
+                        detail=station.get("description", "") or category_name))
+        return rows
+
+    @classmethod
+    def hertz_rows(cls):
+        """Hertz Radio's Radio Browser cache — fresh while Hertz runs, a
+        valid fallback at any other time."""
+        data = read_json(HERTZ_CACHE, {})
+        rows = []
+        if isinstance(data, dict):
+            for page in data.values():
+                if not isinstance(page, list):
+                    continue
+                for station in page:
+                    if not isinstance(station, dict) or not station.get("url"):
+                        continue
+                    rows.append(cls.row(
+                        station.get("name", "Station"), station["url"], "stations",
+                        detail=clamp_text(station.get("genre", ""), 40)))
+        seen, out = set(), []
+        for row in rows:
+            if row["path"] in seen:
+                continue
+            seen.add(row["path"])
+            out.append(row)
+        return out
+
+
+class Backend:
+    def __init__(self, cliamp):
+        self.cliamp = cliamp
+        favorites = read_json(FAVORITES, [])
+        self.favorites = favorites if isinstance(favorites, list) else []
+        settings = read_json(SETTINGS, {})
+        self.settings = dict(DEFAULT_SETTINGS)
+        if isinstance(settings, dict):
+            for key in self.settings:
+                if key in settings:
+                    self.settings[key] = settings[key]
+        self.lastState = None
+        self.stopWatching = threading.Event()
+
+    # ---------------------------------------------------------------- out
+
+    def emit(self, message):
+        sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+    @staticmethod
+    def track_row(track):
+        if not isinstance(track, dict):
+            return {"title": "Station", "path": "", "stream": True}
+        return {
+            "title": clamp_text(track.get("title"), 160),
+            "path": track.get("path", ""),
+            "stream": track.get("stream", True),
+        }
+
+    @staticmethod
+    def _volume_from_snapshot(snap):
+        value = snap.get("volume")
+        if isinstance(value, (int, float)):
+            if abs(value) > 40:          # dB scale [-30, +6] -> 0..100
+                return round(max(0.0, min(100.0, (value + 30) * 100 / 36)))
+            return int(value)
+        return 70
+
+    # ---------------------------------------------------------------- verbs
+
+    def cmd_status(self, _args):
+        message = self.cliamp.call("runtime.snapshot")
+        snap = message.get("snapshot") if message.get("ok") else None
+        if snap:
+            track = snap.get("track") or {}
+            status = {
+                "type": "status",
+                "ok": True,
+                "playing": snap.get("state") == "playing",
+                "paused": snap.get("state") == "paused",
+                "title": clamp_text(track.get("stream_title") or track.get("title"), 200),
+                "station": clamp_text(track.get("station") or track.get("title"), 160),
+                "path": track.get("path", ""),
+                "volume": self._volume_from_snapshot(snap),
+            }
+        else:
+            status = {"type": "status", "ok": False,
+                      "error": clamp_text(message.get("error"), 200) or "cliamp unreachable"}
+        status["favorites"] = self.favorites
+        status["last"] = (read_json(LAST, {}) or {}).get("track")
+        status["settings"] = self.settings
+        status["ytmusic"] = self.provider_ready("ytmusic")
+        self.emit(status)
+
+    def provider_ready(self, provider):
+        """Logged-in probe: cliamp answers a provider search or names a stored
+        credential file. Cookie-backed providers only prove it via a search."""
+        cred = os.path.join(CONFIG, provider + "_credentials.json")
+        if os.path.exists(cred):
+            return {"login": "yes", "detail": ""}
+        try:
+            with open(CONFIG + "/config.toml", encoding="utf-8") as handle:
+                section = re.search(
+                    r"\[" + re.escape(provider) + r"\]([^\[]*)", handle.read())
+        except OSError:
+            section = None
+        cookies = config_value(section.group(1), "cookies_from") if section else ""
+        if cookies:
+            return {"login": "cookie", "detail": clamp_text(cookies, 40)}
+        return {"login": "no", "detail": ""}
+
+    def cmd_stations(self, args):
+        spec = args if isinstance(args, dict) else {}
+        query = (spec.get("text") or "").strip()
+        if not query:
+            query = (spec.get("genre") or "All").strip()
+        page = max(0, int(spec.get("page") or 0))
+        result = self.cliamp.job_result(self.cliamp.call(
+            "provider.search",
+            {"provider": "radio", "query": query[:120],
+             "offset": page * PAGE, "limit": PAGE}))
+        if result.get("ok"):
+            items = [self.track_row(t) for t in result.get("tracks", [])][:PAGE]
+            self.emit({"type": "stations", "key": clamp_text(spec.get("key"), 80),
+                       "items": items, "more": len(items) >= PAGE, "error": ""})
+        else:
+            self.emit({"type": "stations", "key": clamp_text(spec.get("key"), 80),
+                       "items": [], "more": False,
+                       "error": result.get("error", "search failed")})
+
+    def cmd_search(self, args):
+        spec = args if isinstance(args, dict) else {}
+        provider = clamp_text(spec.get("provider"), 16) or "ytmusic"
+        query = clamp_text(spec.get("query"), 200)
+        if not query:
+            self.emit({"type": "search", "provider": provider, "items": [],
+                       "error": "", "setup": False})
+            return
+        result = self.cliamp.job_result(self.cliamp.call(
+            "provider.search", {"provider": provider, "query": query,
+                                "offset": 0, "limit": PAGE}))
+        if not result.get("ok"):
+            text = str(result.get("error", "search failed"))
+            setup = any(word in text.lower() for word in (
+                "unknown", "not configured", "no credentials", "sign in",
+                "cookies database", "no key found", "refresh"))
+            self.emit({"type": "search", "provider": provider, "items": [],
+                       "error": text, "setup": setup})
+            return
+        self.emit({"type": "search", "provider": provider,
+                   "items": [self.track_row(t) for t in result.get("tracks", [])][:PAGE],
+                   "error": "", "setup": False})
+
+    def cmd_home(self, args):
+        spec = args if isinstance(args, dict) else {}
+        genre = clamp_text(spec.get("genre"), 24) or "All"
+        query = "lofi" if genre == "All" else genre.lower()
+
+        # Curated stations matching this genre lead the tab; the directory
+        # fills the rest. "All" shows the whole curated list, since that is
+        # the point of it.
+        items = Sources.curated_rows(genre)
+        if genre == "All":
+            for row in items:
+                row["source"] = "curated"
+                row["detail"] = row.get("detail", "")
+
+        result = self.cliamp.job_result(self.cliamp.call(
+            "provider.search", {"provider": "radio", "query": query,
+                                "offset": 0, "limit": 10}))
+        if result.get("ok"):
+            for track in result.get("tracks", []):
+                if len(items) >= 10:
+                    break
+                items.append(self.track_row(track))
+        self.emit({"type": "home", "genre": genre, "items": items[:10],
+                   "error": "" if result.get("ok") else result.get("error", "search failed")})
+
+    def cmd_browse(self, _args):
+        """The whole merged catalogue for the Stations tab, one line.
+
+        The curated ad-free stations lead, in rank order; the directory
+        results follow, deduplicated against them.
+        """
+        curated = Sources.curated_rows()
+        lofi = Sources.lofi_rows()
+        hertz = Sources.hertz_rows()
+        cliamp_result = self.cliamp.job_result(self.cliamp.call(
+            "provider.search", {"provider": "radio", "query": "lofi",
+                                "offset": 0, "limit": 40}))
+        radio_items = []
+        if cliamp_result.get("ok"):
+            for track in cliamp_result.get("tracks", [])[:40]:
+                row = self.track_row(track)
+                row["source"] = "radio"
+                row["detail"] = "cliamp radio"
+                radio_items.append(row)
+        seen, merged = set(), []
+        for row in curated + lofi + hertz + radio_items:
+            if row["path"] in seen:
+                continue
+            seen.add(row["path"])
+            merged.append(row)
+        self.emit({"type": "browse",
+                   "items": merged[:400],
+                   "counts": {"curated": len(curated), "lofi": len(lofi),
+                              "stations": len(hertz), "radio": len(radio_items)},
+                   "genres": GENRE_OPTIONS})
+
+    def cmd_play(self, args):
+        track = args if isinstance(args, dict) else {}
+        if not track.get("path"):
+            self.emit({"type": "played", "ok": False, "error": "no track"})
+            return
+        result = self.cliamp.job_result(
+            self.cliamp.call("track.play", {"track": Cliamp.track_payload(track)}))
+        if result.get("ok"):
+            self.remember(track)
+            self.emit({"type": "played", "ok": True})
+            self.cmd_status({})
+        else:
+            self.emit({"type": "played", "ok": False,
+                       "error": result.get("error", "play failed")})
+
+    def cmd_start(self, _args):
+        """The big play button obeys the user's onStart preference."""
+        last = (read_json(LAST, {}) or {}).get("track")
+        mode = self.settings.get("onStart", "lofi")
+        if mode == "resume" and isinstance(last, dict) and last.get("path"):
+            track = last
+        elif mode == "none":
+            self.emit({"type": "start", "ok": False, "skipped": True})
+            return
+        else:
+            track = dict(DEFAULT_STATION)
+        result = self.cliamp.job_result(
+            self.cliamp.call("track.play", {"track": Cliamp.track_payload(track)}))
+        if result.get("ok"):
+            self.remember(track)
+            self.emit({"type": "start", "ok": True})
+            self.cmd_status({})
+        else:
+            self.emit({"type": "start", "ok": False,
+                       "error": result.get("error", "play failed")})
+
+    def remember(self, track):
+        try:
+            value = read_json(LAST, {}) or {}
+            value["track"] = self.track_row(track)
+            value["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            write_json(LAST, value)
+        except OSError:
+            pass
+
+    def cmd_toggle(self, _args):
+        message = self.cliamp.call("runtime.snapshot")
+        snap = message.get("snapshot") if message.get("ok") else None
+        if (snap or {}).get("state") in ("playing", "paused"):
+            self.cliamp.call("toggle")
+        else:
+            self.cmd_start({})
+        self.cmd_status({})
+
+    def cmd_stop(self, _args):
+        self.cliamp.call("stop")
+        self.cmd_status({})
+
+    def cmd_next(self, _args):
+        self.cliamp.call("next")
+        self.cmd_status({})
+
+    def cmd_prev(self, _args):
+        self.cliamp.call("prev")
+        self.cmd_status({})
+
+    def cmd_volume(self, args):
+        value = int(args.get("value", 70)) if isinstance(args, dict) else 70
+        value = max(0, min(100, value))
+        self.settings["volume"] = value
+        write_json(SETTINGS, self.settings)
+        db = value if abs(value) > 40 else value * 36 / 100 - 30
+        self.cliamp.call("volume", {"value": round(db, 2)})
+        self.cmd_status({})
+
+    def cmd_mute(self, _args):
+        self.cliamp.call("volume", {"value": -30})
+        self.cmd_status({})
+
+    def cmd_favorites(self, _args):
+        self.emit({"type": "favorites", "items": self.favorites})
+
+    def cmd_fav(self, args):
+        track = args if isinstance(args, dict) else {}
+        key = track.get("path", "")
+        kept = [f for f in self.favorites if f.get("path") != key]
+        if not any(f.get("path") == key for f in self.favorites):
+            kept.insert(0, self.track_row(track))
+        self.favorites = kept[:24]
+        write_json(FAVORITES, self.favorites)
+        self.emit({"type": "favorites", "items": self.favorites})
+
+    def cmd_settings(self, _args):
+        self.emit({"type": "settings", "items": self.settings,
+                   "defaults": DEFAULT_STATION})
+
+    def cmd_set(self, args):
+        spec = args if isinstance(args, dict) else {}
+        key = clamp_text(spec.get("key"), 24)
+        value = spec.get("value")
+        if key in self.settings and isinstance(value, type(self.settings[key])):
+            self.settings[key] = value
+            write_json(SETTINGS, self.settings)
+            self.emit({"type": "settings", "items": self.settings,
+                       "defaults": DEFAULT_STATION})
+        else:
+            self.emit({"type": "error", "message": "bad setting " + key})
+
+    def cmd_setup(self, args):
+        provider = args.get("provider", "ytmusic") if isinstance(args, dict) else "ytmusic"
+        provider = clamp_text(provider, 16)
+        launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
+        if launcher:
+            subprocess.Popen([launcher, "cliamp setup " + provider], start_new_session=True)
+        else:
+            subprocess.Popen([self.cliamp.binary, "setup", provider],
+                             start_new_session=True)
+        self.emit({"type": "setup", "provider": provider})
+
+    def cmd_quit(self, _args):
+        self.stopWatching.set()
+        raise SystemExit(0)
+
+    VERBS = {
+        "status": cmd_status, "stations": cmd_stations, "search": cmd_search,
+        "home": cmd_home, "browse": cmd_browse, "play": cmd_play, "start": cmd_start,
+        "toggle": cmd_toggle, "stop": cmd_stop, "next": cmd_next, "prev": cmd_prev,
+        "volume": cmd_volume, "mute": cmd_mute,
+        "favorites": cmd_favorites, "fav": cmd_fav,
+        "settings": cmd_settings, "set": cmd_set, "setup": cmd_setup,
+        "quit": cmd_quit,
+    }
+    STATUS_VERBS = ("status",)     # verbs that report provider login state
+
+    def dispatch(self, line):
+        line = line.strip()
+        if not line:
+            return
+        try:
+            verb, _, rest = line.partition(" ")
+            rest = rest.strip()
+            if rest.startswith("{"):
+                args = json.loads(rest)
+            elif rest:
+                args = ({"text": rest} if verb not in ("play", "fav", "volume")
+                        else {"track": rest})
+            else:
+                args = {}
+            method = self.VERBS.get(verb.replace("-", "_"))
+            if method is None:
+                self.emit({"type": "error", "message": "unknown verb " + verb[:40]})
+                return
+            method(self, args)
+        except (ValueError, KeyError, TypeError) as error:
+            self.emit({"type": "error", "message": str(error)})
+
+    # ---------------------------------------------------------------- life
+
+    def daemon(self):
+        for attempt in range(5):
+            try:
+                other = int((open(LOCK, encoding="utf-8").read() or "0").strip() or 0)
+                os.kill(other, 0)
+                # Rare race during a shell restart: the old owner usually leaves
+                # within a second, then we take over.
+                if attempt == 4:
+                    log("another daemon (pid %d) is already running" % other)
+                    raise SystemExit(0)
+                time.sleep(0.5)
+            except (ValueError, ProcessLookupError, PermissionError, OSError):
+                break
+        with open(LOCK, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+        self.cliamp.ensure()
+        threading.Thread(target=self.watch, daemon=True).start()
+        self.cmd_status({})
+        try:
+            for line in sys.stdin:
+                self.dispatch(line)
+            self.stopWatching.wait(10)
+        finally:
+            self.stopWatching.set()
+
+    def watch(self):
+        while not self.stopWatching.is_set():
+            if self.stopWatching.wait(1.5):
+                return
+            try:
+                message = self.cliamp.call("runtime.snapshot")
+                snap = message.get("snapshot") if message.get("ok") else None
+            except Exception:
+                continue
+            state = snap.get("state") if snap else None
+            path = (snap or {}).get("track", {}).get("path") if snap else None
+            if (state, path) != self.lastState:
+                self.lastState = (state, path)
+                self.cmd_status({})
+
+
+def one_shot(backend, argv):
+    verb = argv[0] if argv else "status"
+    args = {}
+    if len(argv) > 1 and argv[1].lstrip().startswith("{"):
+        args = json.loads(argv[1])
+    elif len(argv) > 1:
+        key = "text" if verb not in ("play", "fav", "volume") else "track"
+        args = {key: argv[1]}
+    method = backend.VERBS.get(verb.replace("-", "_"))
+    if method is None:
+        print(__doc__)
+        raise SystemExit(2)
+    backend.cliamp.ensure()
+    method(backend, args)
+
+
+def main():
+    backend = Backend(Cliamp())
+    if len(sys.argv) > 1 and sys.argv[1] != "daemon":
+        try:
+            one_shot(backend, sys.argv[1:])
+        except KeyboardInterrupt:
+            pass
+        return
+    try:
+        backend.daemon()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
