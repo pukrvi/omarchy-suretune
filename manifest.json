@@ -1,17 +1,20 @@
 {
   "schemaVersion": 1,
-  "id": "vishnawat.suretune",
+  "id": "io.github.pixdevsapps.suretune",
   "name": "SureTune",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "vishnawat",
   "license": "MIT",
-  "description": "The one radio icon: Sticky player, merged station catalogue (cliamp + Hertz + Lofi Focus), YT Music and Spotify search, user defaults — all driven by cliamp.",
+  "description": "One bar icon for all your music: a sticky player, a station catalogue that leads with verified ad-free streams, and YT Music and Spotify search — all driven by cliamp.",
+  "homepage": "https://github.com/PixDevsApps/omarchy-suretune",
+  "repository": "https://github.com/PixDevsApps/omarchy-suretune",
   "keywords": [
     "radio",
     "music",
     "cliamp",
     "spotify",
-    "youtube"
+    "youtube",
+    "player"
   ],
   "kinds": [
     "bar-widget"
@@ -21,7 +24,7 @@
   },
   "barWidget": {
     "displayName": "SureTune",
-    "description": "Sticky player, merged station catalogue, YT Music & Spotify search",
+    "description": "Sticky player, ad-free station catalogue, YT Music & Spotify search",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "right"
