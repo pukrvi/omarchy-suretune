@@ -33,12 +33,9 @@ SureTune starts `cliamp -d` (headless) itself if it is not already running.
 ## Removing
 
 ```bash
-omarchy plugin remove <plugin-id>
+omarchy plugin remove io.github.pukrvi.suretune
 ```
 
-`omarchy plugin list` shows the id your install uses. On a fresh install
-from the repository above it is `io.github.pukrvi.suretune`; in a checkout
-cloned by hand, the folder name is the id.
 
 This removes the plugin folder. It does not uninstall cliamp or delete
 your provider credentials, which is what you want — the streams you signed
