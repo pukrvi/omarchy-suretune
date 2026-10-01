@@ -18,7 +18,7 @@ you play also lands in cliamp's own history, MPRIS and media-key bindings.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/PixDevsApps/omarchy-suretune.git --enable
+omarchy plugin add https://github.com/pukrvi/omarchy-suretune.git --enable
 ```
 
 Requires `cliamp`, `python` and `python-gobject` (for media keys), and a
@@ -29,6 +29,26 @@ mise install cliamp   # or your package manager
 ```
 
 SureTune starts `cliamp -d` (headless) itself if it is not already running.
+
+## Removing
+
+```bash
+omarchy plugin remove io.github.pukrvi.suretune
+```
+
+This removes the plugin folder. It does not uninstall cliamp or delete
+your provider credentials, which is what you want — the streams you signed
+into stay signed into. Two things are therefore left behind, both yours
+rather than the plugin's:
+
+| Left behind | Where | Remove with |
+|---|---|---|
+| Favourites, last track, settings | `~/.cache/suretune/` | `rm -rf ~/.cache/suretune` |
+| cliamp itself, and its provider credentials | `~/.config/cliamp/` | `cliamp` has no uninstall; remove the directory by hand if you want it gone |
+
+`~/.cache/` is disposable by convention, so leaving it is harmless. Deleting
+`~/.config/cliamp/` would sign you out of YT Music and Spotify, so only do
+that if you also want those gone.
 
 ## Signing in to YT Music
 
