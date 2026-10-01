@@ -61,6 +61,25 @@ kill $(cat ~/.config/cliamp/cliamp.sock.pid) && cliamp -d &
 Note that `~/.config/cliamp/config.toml.ov` is **not** read by cliamp —
 edits there have no effect. The only file that matters is `config.toml`.
 
+> **Status: the fix for this is written but not yet verified end to end.**
+> The original `cookies_from = "chrome"` pointed at a browser directory
+> with no profile in it, and the earlier attempt to correct it was made in
+> `config.toml.ov`, which cliamp does not read — so it never took effect.
+> The value above is the corrected one, but it has not been exercised
+> against a running daemon, because that needs a restart this change could
+> not make on its own. If a search still fails, check that the browser you
+> name is actually launched and signed in to youtube.com, then confirm the
+> fix with:
+>
+> ```bash
+> cliamp remote call provider.search \
+>   --params '{"provider":"ytmusic","query":"lofi","offset":0,"limit":5}' --wait
+> ```
+>
+> A result with tracks means it is working. An error naming a cookies
+> database means the browser name is still wrong; a decryption error means
+> the keyring is locked.
+
 Spotify works the same way; run `cliamp spotify` to sign in.
 
 ## The ad-free list

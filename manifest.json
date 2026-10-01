@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.pixdevsapps.suretune",
+  "id": "io.github.pukrvi.suretune",
   "name": "SureTune",
   "version": "0.3.0",
   "author": "vishnawat",
   "license": "MIT",
   "description": "One bar icon for all your music: a sticky player, a station catalogue that leads with verified ad-free streams, and YT Music and Spotify search — all driven by cliamp.",
-  "homepage": "https://github.com/PixDevsApps/omarchy-suretune",
-  "repository": "https://github.com/PixDevsApps/omarchy-suretune",
+  "homepage": "https://github.com/pukrvi/omarchy-suretune",
+  "repository": "https://github.com/pukrvi/omarchy-suretune",
   "keywords": [
     "radio",
     "music",
